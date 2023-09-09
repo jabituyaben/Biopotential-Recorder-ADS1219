@@ -1,6 +1,6 @@
 # Biopotential Recorder ADS1219
 
-This Arduino project is built around the ADS1219 where this ADC is used and configured to read data at 250Hz in differential mode, in my case it’s EEG readings. This data is then stored on an SD-Card as contiguous 24 bit integers.
+This simple Arduino project is built around the ADS1219 where this ADC is used and configured to read data at 250Hz in differential mode, in my case it’s EEG readings. This data is then stored on an SD-Card as contiguous 24 bit integers.
 
 It configures a timer with interrupts that requests new ADC readings and I've implemented double buffering for saving data to an SD-Card for more efficient data storage. This timer should work for most Arduino based boards.
 
