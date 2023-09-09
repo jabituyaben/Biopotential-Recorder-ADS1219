@@ -115,7 +115,7 @@ bool readValue(void *){
       if(counter < 512){
           currentBuffer[counter] = ads.readConversionResult();
           ads.readDifferential_0_1();
-          Serial.println(currentBuffer[counter]); //comment this line out when using the checkRate function above
+          Serial.println(currentBuffer[counter]); //comment this line out when using the checkRate feature above
           counter += 1;
       }
       return true;
