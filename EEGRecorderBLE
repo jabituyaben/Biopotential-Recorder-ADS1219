@@ -1,0 +1,147 @@
+#include <Wire.h>
+#include <SPI.h>
+#include <SD.h>
+#include <ADS1219.h>
+#include <arduino-timer.h>
+#include <BLEDevice.h>
+#include <BLEUtils.h>
+#include <BLEServer.h>
+
+#define address 0x40
+#define drdy 15 // data ready pin not really used here
+
+Timer<10, micros> timer;
+
+ADS1219 ads(drdy);
+File logfile;
+
+long bufferA[512];
+long bufferB[512];
+long *currentBuffer;
+
+int counter = 0;
+bool reconnected = false;
+char filename[15];
+
+// BLE UUIDs
+#define SERVICE_UUID           "12345678-1234-5678-1234-56789abcdef0"
+#define CHARACTERISTIC_UUID    "12345678-1234-5678-1234-56789abcdef1"
+
+BLEServer *bleServer;
+BLECharacteristic *bleCharacteristic;
+
+// Reconnect SD card function
+void reconnectSD() {
+  while (!SD.begin(4)) {}
+  while (!reconnected) {
+    logfile = SD.open(filename, FILE_WRITE);
+    if (logfile) {
+      reconnected = true;
+      logfile.seek(logfile.size());
+    }
+  }
+  Serial.println("SD reconnected");
+  digitalWrite(LED_BUILTIN, LOW);
+}
+
+void setup() {
+  currentBuffer = bufferA;
+  ads.begin();
+  Wire.begin();
+  Serial.begin(9600);
+  
+  ads.setVoltageReference(REF_INTERNAL);
+  ads.setGain(ONE);
+  ads.setDataRate(DATA_RATE_1000);
+
+  if (!SD.begin(4)) {
+    Serial.println("SD initialization failed!");
+    while (1);
+  }
+
+  pinMode(LED_BUILTIN, OUTPUT);
+  digitalWrite(LED_BUILTIN, HIGH);
+  strcpy(filename, "/ANALOG00.dat");
+
+  for (uint8_t i = 0; i < 100; i++) {
+    filename[7] = '0' + i / 10;
+    filename[8] = '0' + i % 10;
+    if (!SD.exists(filename)) {
+      break;
+    }
+  }
+
+  logfile = SD.open(filename, FILE_WRITE);
+  if (!logfile) {
+    Serial.print("Could not create ");
+    Serial.println(filename);
+    while (1);
+  }
+
+  digitalWrite(LED_BUILTIN, LOW);
+
+  // Initialize BLE server
+  BLEDevice::init("ESP32_BLE_Server");
+  bleServer = BLEDevice::createServer();
+
+  BLEService *service = bleServer->createService(SERVICE_UUID);
+  bleCharacteristic = service->createCharacteristic(
+      CHARACTERISTIC_UUID,
+      BLECharacteristic::PROPERTY_NOTIFY
+  );
+
+  // Start the BLE service
+  service->start();
+  bleServer->getAdvertising()->start();
+
+  Serial.println("BLE server is ready and advertising...");
+
+  // Start timer for ADC reads
+  timer.every(3960, readValue);
+}
+
+void loop() {
+  timer.tick();
+
+  if (counter == 512) {
+    if (currentBuffer == bufferA) {
+      currentBuffer = bufferB;
+      counter = 0;
+      writeBufferToSD(bufferA);
+    } else {
+      currentBuffer = bufferA;
+      counter = 0;
+      writeBufferToSD(bufferB);
+    }
+  }
+}
+
+void writeBufferToSD(long *buffer) {
+  if (logfile) {
+    if (!logfile.write((const uint8_t *)buffer, sizeof(bufferA))) {
+      Serial.println("Error writing to SD");
+      reconnectSD();
+    }
+    logfile.flush();
+  }
+}
+
+bool readValue(void *) {
+  if (counter < 512) {
+    long value = ads.readConversionResult();
+    currentBuffer[counter] = value;
+    ads.readDifferential_0_1();
+
+    // Print to Serial
+    Serial.println(value);
+
+    // Send data to BLE client
+    char valueString[20];
+    snprintf(valueString, sizeof(valueString), "%ld", value);
+    bleCharacteristic->setValue((uint8_t *)valueString, strlen(valueString));
+    bleCharacteristic->notify();
+
+    counter += 1;
+  }
+  return true;
+}
