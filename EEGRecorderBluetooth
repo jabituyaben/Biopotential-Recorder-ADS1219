@@ -1,0 +1,138 @@
+#include <Wire.h>
+#include <SPI.h>
+#include <SD.h>
+#include <ADS1219.h>
+#include <arduino-timer.h>
+#include <BluetoothSerial.h>
+
+#define address 0x40
+#define drdy 15 // data ready pin not really used here
+
+Timer<10, micros> timer;
+
+ADS1219 ads(drdy);
+File logfile;
+BluetoothSerial SerialBT;  // Bluetooth Serial object
+
+long adc0;
+int counter = 0;
+bool reconnected = false;
+char filename[15];
+int checkRate = 0;
+int fileSize = 0;
+int previousCount = 0;
+int readVal = 0;
+long bufferA[512];
+long bufferB[512];
+long *currentBuffer;
+
+void reconnectSD() {
+  while (!SD.begin(4)) {
+  }
+  while (!reconnected) {
+    logfile = SD.open(filename, FILE_WRITE);
+    if (logfile) {
+      reconnected = true;
+      logfile.seek(logfile.size());
+    }
+  }
+  fileSize = 0;
+  Serial.println("reconnected");
+  SerialBT.println("reconnected");  // Print message via Bluetooth
+  digitalWrite(LED_BUILTIN, LOW);
+}
+
+void setup() {
+  currentBuffer = bufferA;
+  ads.begin();
+  Wire.begin();
+  Serial.begin(9600);
+  SerialBT.begin("ESP32_BLE");  // Initialize Bluetooth with device name "ESP32_BLE"
+  ads.setVoltageReference(REF_INTERNAL);
+  ads.setGain(ONE);
+  ads.setDataRate(DATA_RATE_1000);
+
+  if (!SD.begin(4)) {
+    Serial.println("initialization failed!");
+    SerialBT.println("initialization failed!");  // Bluetooth message
+    while (1);
+  }
+
+  pinMode(LED_BUILTIN, OUTPUT);
+  digitalWrite(LED_BUILTIN, HIGH);
+  strcpy(filename, "/ANALOG00.dat");
+
+  for (uint8_t i = 0; i < 100; i++) {
+    filename[7] = '0' + i / 10;
+    filename[8] = '0' + i % 10;
+    // create if does not exist
+    if (!SD.exists(filename)) {
+      break;
+    }
+  }
+
+  logfile = SD.open(filename, FILE_WRITE);
+  if (!logfile) {
+    Serial.print("Couldnt create ");
+    Serial.println(filename);
+    SerialBT.print("Couldnt create ");  // Bluetooth message
+    SerialBT.println(filename);
+    while (1);
+  }
+
+  digitalWrite(LED_BUILTIN, LOW);
+  timer.every(3960, readValue);
+}
+
+void loop() {
+  timer.tick();
+
+  if (counter == 512) {
+    checkRate = 1;
+    if (currentBuffer == bufferA) {
+      currentBuffer = bufferB;
+      counter = 0;
+      if (logfile) {
+        if (!logfile.write((const uint8_t *)&bufferA, sizeof(bufferA))) {
+          Serial.println("error writing");
+          SerialBT.println("error writing");  // Bluetooth message
+          Serial.println("reconnecting...");
+          SerialBT.println("reconnecting...");
+          digitalWrite(LED_BUILTIN, HIGH);
+          reconnectSD();
+        }
+        logfile.flush();
+      }
+    } else {
+      currentBuffer = bufferA;
+      counter = 0;
+      if (logfile) {
+        if (!logfile.write((const uint8_t *)&bufferB, sizeof(bufferB))) {
+          Serial.println("error writing");
+          SerialBT.println("error writing");  // Bluetooth message
+          Serial.println("reconnecting...");
+          SerialBT.println("reconnecting...");
+          digitalWrite(LED_BUILTIN, HIGH);
+          reconnectSD();
+        }
+        logfile.flush();
+      }
+    }
+  }
+
+  if (checkRate == 1) {
+    previousCount = millis();
+    checkRate = 0;
+  }
+}
+
+bool readValue(void *) {
+  if (counter < 512) {
+    currentBuffer[counter] = ads.readConversionResult();
+    ads.readDifferential_0_1();
+    Serial.println(currentBuffer[counter]);
+    SerialBT.println(currentBuffer[counter]);  // Send data over Bluetooth
+    counter += 1;
+  }
+  return true;
+}
